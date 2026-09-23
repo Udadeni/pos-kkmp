@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mekarjaya - Savings & Journal Repair</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import { initializeApp, getApps, deleteApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, getDocs, doc, updateDoc, query, where, Timestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getAuth, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+        const configs = {
+            production: {
+                apiKey: "AIzaSyAWcW3EAMPSXyR89yBpghJpN11IFS-8qxk",
+                authDomain: "kmp-mekarjaya.firebaseapp.com",
+                projectId: "kmp-mekarjaya",
+                storageBucket: "kmp-mekarjaya.firebasestorage.app",
+                messagingSenderId: "480274733954",
+                appId: "1:480274733954:web:5c0edbda7c540fb4624d9b"
+                            },
+            simulation: {
+                apiKey: "AIzaSyAWUrizaUIkR36qwa7ZUHGEgWGh3RO6gkY",
+                authDomain: "kkmp-pos.firebaseapp.com",
+                projectId: "kkmp-pos",
+                storageBucket: "kkmp-pos.firebasestorage.app",
+                messagingSenderId: "792982672059",
+                appId: "1:792982672059:web:959e5b48cfe7b211f90f9e"
+                            }
+        };
+
+        let db, auth, currentApp;
+        let targetEnv = 'simulation';
+        let repairQueue = [];
+
+        window.setEnv = (env) => {
+            targetEnv = env;
+            document.getElementById('env-prod').className = env === 'production' ? "flex-1 py-3 bg-rose-600 text-white font-black text-[10px] rounded-xl shadow-lg transition-all" : "flex-1 py-3 bg-slate-700 text-slate-400 font-black text-[10px] rounded-xl transition-all";
+            document.getElementById('env-sim').className = env === 'simulation' ? "flex-1 py-3 bg-emerald-600 text-white font-black text-[10px] rounded-xl shadow-lg transition-all" : "flex-1 py-3 bg-slate-700 text-slate-400 font-black text-[10px] rounded-xl transition-all";
+        };
+
+        window.handleLogin = async () => {
+            const email = document.getElementById('email').value;
+            const pass = document.getElementById('password').value;
+            try {
+                if (getApps().length > 0) await deleteApp(currentApp);
+                currentApp = initializeApp(configs[targetEnv]);
+                db = getFirestore(currentApp);
+                auth = getAuth(currentApp);
+                await signInWithEmailAndPassword(auth, email, pass);
+                document.getElementById('login-section').classList.add('hidden');
+                document.getElementById('tool-section').classList.remove('hidden');
+                log(`🟢 TERHUBUNG KE ${targetEnv.toUpperCase()}`, "text-emerald-400");
+            } catch (e) { alert("Login Gagal: " + e.message); }
+        };
+
+        function log(msg, color = "text-slate-400") {
+            const l = document.getElementById('log-area');
+            l.innerHTML += `<div class="${color} mb-1">[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+            l.scrollTop = l.scrollHeight;
+        }
+
+        // TAHAP 1: SCANNING DATA BERMASALAH
+        window.startScan = async () => {
+            log("🔍 Memulai pemindaian mendalam (Savings & Journals)...", "text-indigo-400");
+            repairQueue = [];
+            document.getElementById('btn-repair').classList.add('hidden');
+            
+            try {
+                // SCAN 1: Berdasarkan Transaksi Simpanan (MST)
+                const mstSnap = await getDocs(collection(db, 'member_savings_transactions'));
+                for (const mstDoc of mstSnap.docs) {
+                    const mstData = mstDoc.data();
+                    let needsRepair = false;
+                    let reason = [];
+
+                    // Cek ref_no di MST
+                    if (!mstData.ref_no) {
+                        needsRepair = true;
+                        reason.push("MST: ref_no hilang");
+                    }
+
+                    // Cari Jurnal pasangannya
+                    const jeQuery = query(collection(db, 'journal_entries'), where('reference_id', '==', mstDoc.id));
+                    const jeSnap = await getDocs(jeQuery);
+                    
+                    if (!jeSnap.empty) {
+                        const jeDoc = jeSnap.docs[0];
+                        const jeData = jeDoc.data();
+
+                        if (!jeData.ref_no || jeData.ref_no === '') {
+                            needsRepair = true;
+                            reason.push("JE: ref_no kosong");
+                        }
+
+                        // Kondisi Tambahan: Cek repaired_at di Jurnal
+                        if (jeData.repaired_at) {
+                            needsRepair = true;
+                            reason.push("JE: migrasi repaired_at");
+                        }
+
+                        if (needsRepair) {
+                            repairQueue.push({
+                                type: 'SAVINGS_LINK',
+                                mstId: mstDoc.id,
+                                mstData: mstData,
+                                jeId: jeDoc.id,
+                                jeData: jeData,
+                                reason: reason.join(", ")
+                            });
+                        }
+                    }
+                }
+
+                // SCAN 2: Cek Jurnal secara mandiri (untuk repaired_at yang tidak terkait simpanan)
+                const jeSnapAll = await getDocs(collection(db, 'journal_entries'));
+                jeSnapAll.forEach(jeDoc => {
+                    const jeData = jeDoc.data();
+                    // Jika ada repaired_at tapi belum masuk antrian perbaikan link simpanan
+                    if (jeData.repaired_at && !repairQueue.find(q => q.jeId === jeDoc.id)) {
+                        repairQueue.push({
+                            type: 'GENERAL_JOURNAL',
+                            jeId: jeDoc.id,
+                            jeData: jeData,
+                            reason: "JE: migrasi repaired_at (mandiri)"
+                        });
+                    }
+                });
+
+                if (repairQueue.length > 0) {
+                    log(`⚠️ Ditemukan ${repairQueue.length} anomali data.`, "text-amber-400");
+                    document.getElementById('scan-info').innerHTML = `TERDETEKSI <b>${repairQueue.length}</b> DATA PERLU NORMALISASI`;
+                    document.getElementById('btn-repair').classList.remove('hidden');
+                } else {
+                    log("✅ Semua data sudah bersih dan sesuai standar.", "text-emerald-400");
+                    document.getElementById('scan-info').innerHTML = "DATA SUDAH BERSIH";
+                }
+            } catch (e) { log("🔴 SCAN ERROR: " + e.message, "text-rose-500"); }
+        };
+
+        // TAHAP 2: EKSEKUSI PERBAIKAN
+        window.startRepair = async () => {
+            if(!confirm(`Mulai proses normalisasi ${repairQueue.length} data?`)) return;
+            
+            const progressBar = document.getElementById('progress-bar');
+            const progressText = document.getElementById('progress-text');
+            const total = repairQueue.length;
+            let success = 0;
+
+            for (const item of repairQueue) {
+                try {
+                    // 1. Jika ada MST (Simpanan), pastikan ref_no aman
+                    let finalRefNo = null;
+                    if (item.type === 'SAVINGS_LINK') {
+                        finalRefNo = item.mstData.ref_no;
+                        if (!finalRefNo) {
+                            const createdAt = item.mstData.created_at;
+                            const timestamp = createdAt ? createdAt.toMillis() : Date.now();
+                            finalRefNo = `SAV-${timestamp}`;
+                            await updateDoc(doc(db, 'member_savings_transactions', item.mstId), { ref_no: finalRefNo });
+                        }
+                    }
+
+                    // 2. Perbaikan Jurnal
+                    const journalUpdate = {};
+                    
+                    // Jika link simpanan, update ref_no-nya
+                    if (finalRefNo) journalUpdate.ref_no = finalRefNo;
+
+                    // Normalisasi repaired_at ke updated_at
+                    if (item.jeData.repaired_at) {
+                        journalUpdate.updated_at = item.jeData.repaired_at;
+                        // Kita biarkan repaired_at tetap ada agar tidak merusak data, 
+                        // tapi updated_at sekarang sudah berisi nilai yang benar untuk sorting laporan.
+                    } else if (item.mstData && item.mstData.updated_at) {
+                        journalUpdate.updated_at = item.mstData.updated_at;
+                    }
+
+                    await updateDoc(doc(db, 'journal_entries', item.jeId), journalUpdate);
+                    
+                    success++;
+                    const percent = Math.round((success / total) * 100);
+                    progressBar.style.width = `${percent}%`;
+                    progressText.innerText = `${percent}% (${success}/${total})`;
+                    log(`✅ NORMALIZED: ${item.jeId.substring(0,8)}...`, "text-emerald-500");
+
+                } catch (err) {
+                    log(`🔴 GAGAL: ${item.jeId} - ${err.message}`, "text-rose-500");
+                }
+            }
+
+            log(`💎 MISSION COMPLETE! ${success} data disinkronkan.`, "text-white font-bold bg-indigo-900 px-2 mt-2 text-center uppercase tracking-widest");
+            document.getElementById('btn-repair').classList.add('hidden');
+        };
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;800&display=swap');
+        body { font-family: 'JetBrains Mono', monospace; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-300 min-h-screen p-6 md:p-12">
+    <div class="max-w-2xl mx-auto">
+        <header class="text-center mb-10">
+            <h1 class="text-2xl font-extrabold text-white italic tracking-tighter uppercase">Savings <span class="text-indigo-500">&</span> Journal Repair <span class="text-indigo-600">v1.1</span></h1>
+            <p class="text-[10px] text-slate-500 tracking-[0.3em] mt-2 uppercase italic">Data Normalization & Timestamp Migration</p>
+        </header>
+
+        <!-- LOGIN -->
+        <div id="login-section" class="bg-slate-900 p-8 rounded-3xl border border-slate-800 shadow-2xl">
+            <div class="flex gap-2 mb-6 p-1 bg-slate-950 rounded-2xl border border-slate-100">
+                <button id="env-prod" onclick="setEnv('production')" class="flex-1 py-3 bg-slate-700 text-slate-400 font-black text-[10px] rounded-xl transition-all">PRODUCTION (LIVE)</button>
+                <button id="env-sim" onclick="setEnv('simulation')" class="flex-1 py-3 bg-emerald-600 text-white font-black text-[10px] rounded-xl shadow-lg transition-all">SIMULATION (TEST)</button>
+            </div>
+            <div class="space-y-3">
+                <input type="email" id="email" placeholder="ADMIN EMAIL" class="w-full p-4 bg-slate-950 rounded-xl border border-slate-800 outline-none focus:border-indigo-500 text-xs font-bold text-center">
+                <input type="password" id="password" placeholder="PASSWORD" class="w-full p-4 bg-slate-950 rounded-xl border border-slate-800 outline-none focus:border-indigo-500 text-xs font-bold text-center">
+                <button onclick="handleLogin()" class="w-full bg-indigo-600 py-4 rounded-xl font-bold uppercase text-xs tracking-widest hover:opacity-90 shadow-xl transition-all">AUTHORIZE ACCESS</button>
+            </div>
+        </div>
+
+        <!-- TOOL AREA -->
+        <div id="tool-section" class="hidden space-y-6">
+            <div class="bg-slate-900 border border-slate-800 p-6 rounded-3xl text-center">
+                <p id="scan-info" class="text-xs font-bold tracking-widest text-slate-400 mb-4 uppercase">SCANNING MODE: DEEP INSPECTION</p>
+                <div class="flex gap-4">
+                    <button onclick="startScan()" class="flex-1 bg-white text-slate-950 py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-indigo-100 transition-all">1. SCAN DATA</button>
+                    <button id="btn-repair" onclick="startRepair()" class="hidden flex-1 bg-rose-600 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-rose-700 transition-all shadow-xl">2. RUN NORMALIZATION</button>
+                </div>
+            </div>
+
+            <div class="bg-slate-950 p-6 rounded-3xl border border-slate-800">
+                <div class="flex justify-between text-[10px] font-bold mb-2 uppercase tracking-widest text-slate-500">
+                    <span>Task Progress</span>
+                    <span id="progress-text">0%</span>
+                </div>
+                <div class="w-full bg-slate-900 h-4 rounded-full overflow-hidden border border-slate-800">
+                    <div id="progress-bar" class="h-full bg-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.5)] transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div id="log-area" class="h-64 bg-black/50 border border-slate-800 rounded-3xl p-6 overflow-y-auto text-[10px] font-mono shadow-inner">
+            </div>
+        </div>
+    </div>
+</body>
+</html>

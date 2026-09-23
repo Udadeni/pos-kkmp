@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mekarjaya - Multi DB Tool v2.7</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script type="module">
+        import { initializeApp, getApps, deleteApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, getDocs, doc, setDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getAuth, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+        // =============================================================
+        // CONFIG AREA
+        // =============================================================
+        const configs = {
+            production: {
+                apiKey: "AIzaSyAWcW3EAMPSXyR89yBpghJpN11IFS-8qxk",
+                authDomain: "kmp-mekarjaya.firebaseapp.com",
+                projectId: "kmp-mekarjaya",
+                storageBucket: "kmp-mekarjaya.firebasestorage.app",
+                messagingSenderId: "480274733954",
+                appId: "1:480274733954:web:5c0edbda7c540fb4624d9b"
+                            },
+            simulation: {
+                apiKey: "AIzaSyAWUrizaUIkR36qwa7ZUHGEgWGh3RO6gkY",
+                authDomain: "kkmp-pos.firebaseapp.com",
+                projectId: "kkmp-pos",
+                storageBucket: "kkmp-pos.firebasestorage.app",
+                messagingSenderId: "792982672059",
+                appId: "1:792982672059:web:959e5b48cfe7b211f90f9e"
+                            }
+        };
+
+        const masterItems = [
+            { id: 'master_members', label: 'Anggota', icon: '👥' },
+            { id: 'master_products', label: 'Produk', icon: '📦' },
+            { id: 'master_suppliers', label: 'Supplier', icon: '🏭' },
+            { id: 'master_users', label: 'User System', icon: '🔑' }
+        ];
+
+        const headerItems = [
+            { id: 'transactions_purchase', label: 'Pembelian', icon: '🛒' },
+            { id: 'transactions_purchase_returns', label: 'Retur Beli', icon: '↩️' },
+            { id: 'transactions_sales', label: 'Penjualan', icon: '🏷️' }
+        ];
+
+        const detailItems = [
+            { id: 'transactions_purchase_details', label: 'Rincian Beli', icon: '📝' },
+            { id: 'transactions_purchase_returns_items', label: 'Rincian Retur', icon: '📋' },
+            { id: 'transactions_sales_items', label: 'Rincian Jual', icon: '📊' },
+            { id: 'transactions_sales_payments', label: 'Log Bayar Hutang', icon: '💳' }
+        ];
+
+        const otherItems = [
+            { id: 'journal_entries', label: 'Jurnal Akuntansi', icon: '📓' },
+            { id: 'expenses', label: 'Biaya/Beban', icon: '💸' }, // <-- KOLEKSI BARU
+            { id: 'cash_handovers', label: 'Serah Terima Cash', icon: '🤝' },
+            { id: 'member_loans', label: 'Pinjaman', icon: '📉' },
+            { id: 'member_savings_transactions', label: 'Simpanan Anggota', icon: '💰' },
+            { id: 'transactions_adjustments', label: 'Stok Opname', icon: '⚖️' },
+            { id: 'transactions_stock_mutations', label: 'Mutasi Stok', icon: '🔄' },
+            { id: 'system_settings', label: 'System Set (Promo)', icon: '⚙️' }
+        ];
+
+        let db, auth, currentApp;
+        let currentMode = 'export';
+        let targetEnv = 'production';
+
+        window.setEnv = (env) => {
+            targetEnv = env;
+            const btnProd = document.getElementById('env-prod');
+            const btnSim = document.getElementById('env-sim');
+            const loginBtn = document.getElementById('login-btn');
+
+            if(env === 'production') {
+                btnProd.className = "flex-1 py-3 bg-rose-600 text-white font-black text-[10px] rounded-xl shadow-lg transition-all";
+                btnSim.className = "flex-1 py-3 bg-slate-100 text-slate-400 font-black text-[10px] rounded-xl hover:bg-slate-200 transition-all";
+                loginBtn.innerHTML = "AUTHENTICATE TO LIVE PROD";
+                loginBtn.className = "mt-2 bg-rose-600 text-white py-5 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl";
+            } else {
+                btnSim.className = "flex-1 py-3 bg-emerald-600 text-white font-black text-[10px] rounded-xl shadow-lg transition-all";
+                btnProd.className = "flex-1 py-3 bg-slate-100 text-slate-400 font-black text-[10px] rounded-xl hover:bg-slate-200 transition-all";
+                loginBtn.innerHTML = "AUTHENTICATE TO SIMULATION";
+                loginBtn.className = "mt-2 bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl";
+            }
+        };
+
+        window.handleLogin = async () => {
+            try {
+                if (getApps().length > 0) await deleteApp(currentApp);
+                currentApp = initializeApp(configs[targetEnv]);
+                db = getFirestore(currentApp);
+                auth = getAuth(currentApp);
+                await signInWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value);
+                document.getElementById('login-section').classList.add('hidden');
+                document.getElementById('main-tool').classList.remove('hidden');
+                document.getElementById('env-indicator').innerHTML = targetEnv === 'production' ? '⚠️ LIVE PRODUCTION' : '🧪 SIMULATION DB';
+                document.getElementById('env-indicator').className = targetEnv === 'production' ? 'text-rose-600 font-black uppercase text-xs tracking-[0.2em]' : 'text-emerald-600 font-black uppercase text-xs tracking-[0.2em]';
+                renderAll();
+                switchMode('export');
+            } catch (e) { alert("Login Gagal: " + e.message); }
+        };
+
+        window.handleLogout = async () => {
+            if (!confirm("Keluar dari database saat ini?")) return;
+            try {
+                if (auth) await signOut(auth);
+                if (currentApp) await deleteApp(currentApp);
+                document.getElementById('main-tool').classList.add('hidden');
+                document.getElementById('login-section').classList.remove('hidden');
+                document.getElementById('password').value = "";
+                setEnv('production');
+            } catch (e) { alert(e.message); }
+        };
+
+        window.switchMode = (mode) => {
+            currentMode = mode;
+            const btnExport = document.getElementById('mode-export');
+            const btnImport = document.getElementById('mode-import');
+            const statusBox = document.getElementById('process-status');
+            const superBtn = document.getElementById('super-backup-container');
+
+            if(mode === 'export') {
+                btnExport.className = "flex-1 py-4 bg-slate-900 text-white font-black italic rounded-2xl shadow-lg";
+                btnImport.className = "flex-1 py-4 bg-slate-100 text-slate-400 font-black italic rounded-2xl hover:bg-slate-200 transition-all";
+                statusBox.innerHTML = `MODE: EKSPOR DATA DARI ${targetEnv.toUpperCase()}`;
+                superBtn.classList.remove('hidden');
+            } else {
+                btnImport.className = targetEnv === 'production' ? "flex-1 py-4 bg-rose-600 text-white font-black italic rounded-2xl shadow-lg" : "flex-1 py-4 bg-emerald-600 text-white font-black italic rounded-2xl shadow-lg";
+                btnExport.className = "flex-1 py-4 bg-slate-100 text-slate-400 font-black italic rounded-2xl hover:bg-slate-200 transition-all";
+                statusBox.innerHTML = `MODE: IMPORT DATA KE ${targetEnv.toUpperCase()}`;
+                superBtn.classList.add('hidden');
+            }
+        };
+
+        function createBtn(item) {
+            const btn = document.createElement('button');
+            btn.className = "p-4 bg-white border border-slate-100 rounded-2xl hover:border-slate-900 transition-all shadow-sm hover:shadow-md active:scale-95 flex flex-col items-center justify-center gap-2 text-center";
+            btn.innerHTML = `<span class="text-2xl">${item.icon}</span><span class="text-[9px] font-black uppercase tracking-tighter text-slate-600 leading-tight">${item.label}</span>`;
+            btn.onclick = () => handleAction(item.id, item.label);
+            return btn;
+        }
+
+        function renderAll() {
+            const masterGrid = document.getElementById('master-grid');
+            masterGrid.innerHTML = '';
+            masterItems.forEach(item => masterGrid.appendChild(createBtn(item)));
+
+            const headerGrid = document.getElementById('header-grid');
+            headerGrid.innerHTML = '';
+            headerItems.forEach(item => headerGrid.appendChild(createBtn(item)));
+
+            const detailGrid = document.getElementById('detail-grid');
+            detailGrid.innerHTML = '';
+            detailItems.forEach(item => detailGrid.appendChild(createBtn(item)));
+
+            const otherGrid = document.getElementById('other-grid');
+            otherGrid.innerHTML = '';
+            otherItems.forEach(item => otherGrid.appendChild(createBtn(item)));
+        }
+
+        async function handleAction(id, label) {
+            if (currentMode === 'export') {
+                await exportData(id, label);
+            } else {
+                if (targetEnv === 'production') {
+                    if (!confirm(`⚠️ PERINGATAN: Anda akan mengimport data ke LIVE PRODUCTION [${label}]. Lanjutkan?`)) return;
+                }
+                document.getElementById('hiddenFileInput').setAttribute('data-coll-id', id);
+                document.getElementById('hiddenFileInput').setAttribute('data-coll-label', label);
+                document.getElementById('hiddenFileInput').click();
+            }
+        }
+
+        async function exportData(collId, label, silent = false) {
+            const statusBox = document.getElementById('process-status');
+            if(!silent) statusBox.innerHTML = `⏳ MENARIK ${label.toUpperCase()}...`;
+            
+            try {
+                const snap = await getDocs(collection(db, collId));
+                const data = [];
+                snap.forEach(doc => {
+                    const row = { FIREBASE_ID: doc.id, ...doc.data() };
+                    for (let key in row) {
+                        if (row[key] && typeof row[key].toDate === 'function') row[key] = row[key].toDate().toISOString();
+                        if (Array.isArray(row[key]) || (row[key] !== null && typeof row[key] === 'object')) row[key] = JSON.stringify(row[key]);
+                    }
+                    data.push(row);
+                });
+                
+                if (data.length === 0) { 
+                    if(!silent) statusBox.innerHTML = `❌ DATA ${label.toUpperCase()} KOSONG!`;
+                    return; 
+                }
+
+                const now = new Date();
+                const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+                const ws = XLSX.utils.json_to_sheet(data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "DATA");
+                const fileName = `MEKARJAYA_${targetEnv.toUpperCase()}_${collId.toUpperCase()}_${dateStr}.xlsx`;
+                XLSX.writeFile(wb, fileName);
+                
+                if(!silent) statusBox.innerHTML = `✅ BERHASIL: ${fileName}`;
+            } catch (e) { 
+                if(!silent) statusBox.innerHTML = "🔴 ERROR: " + e.message; 
+            }
+        }
+
+        window.exportAllData = async () => {
+            const allItems = [...masterItems, ...headerItems, ...detailItems, ...otherItems];
+            if(!confirm(`Mulai proses SUPER BACKUP untuk ${allItems.length} koleksi?`)) return;
+
+            const statusBox = document.getElementById('process-status');
+            for(let i = 0; i < allItems.length; i++) {
+                const item = allItems[i];
+                statusBox.innerHTML = `🚀 SUPER BACKUP: (${i+1}/${allItems.length}) MENARIK ${item.label.toUpperCase()}...`;
+                await exportData(item.id, item.label, true);
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+            statusBox.innerHTML = `💎 SUPER BACKUP SELESAI!`;
+        };
+
+        window.handleFileSelect = async (event) => {
+            const file = event.target.files[0];
+            const collId = event.target.getAttribute('data-coll-id');
+            const label = event.target.getAttribute('data-coll-label');
+            const statusBox = document.getElementById('process-status');
+            if(!file) return;
+            statusBox.innerHTML = `⏳ UPLOADING TO ${targetEnv.toUpperCase()}...`;
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+                    let count = 0;
+                    for (const row of jsonData) {
+                        const docId = row.FIREBASE_ID;
+                        if (!docId) continue;
+                        const cleanData = { ...row };
+                        delete cleanData.FIREBASE_ID;
+                        for (let key in cleanData) {
+                            const val = cleanData[key];
+                            if (typeof val === 'string' && (val.startsWith('{') || val.startsWith('['))) {
+                                try { cleanData[key] = JSON.parse(val); } catch (e) {}
+                            }
+                            if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(val)) cleanData[key] = new Date(val);
+                        }
+                        await setDoc(doc(db, collId, docId), cleanData);
+                        count++;
+                        statusBox.innerHTML = `⏳ SYNCING: ${count} / ${jsonData.length}`;
+                    }
+                    statusBox.innerHTML = `✅ SYNC SELESAI: ${count} DATA ${label}`;
+                } catch (err) { statusBox.innerHTML = "🔴 ERROR: " + err.message; }
+            };
+            reader.readAsArrayBuffer(file);
+            event.target.value = "";
+        };
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+    </style>
+</head>
+<body class="p-6 md:p-10">
+    <div class="max-w-6xl mx-auto">
+        <header class="text-center mb-10">
+            <h1 class="text-5xl font-black italic uppercase tracking-tighter text-slate-900 leading-none">Mekarjaya Tool</h1>
+            <div id="env-indicator" class="text-[10px] font-bold text-slate-400 tracking-[0.5em] uppercase mt-4">SELECT DATABASE ENVIRONMENT</div>
+        </header>
+
+        <!-- LOGIN -->
+        <div id="login-section" class="max-w-md mx-auto bg-white p-10 rounded-[3rem] shadow-2xl border border-slate-100">
+            <div class="flex gap-2 p-1.5 bg-slate-50 rounded-2xl mb-6 border border-slate-100">
+                <button id="env-prod" onclick="setEnv('production')" class="flex-1 py-3 bg-rose-600 text-white font-black text-[10px] rounded-xl shadow-lg transition-all">LIVE PROD</button>
+                <button id="env-sim" onclick="setEnv('simulation')" class="flex-1 py-3 bg-slate-100 text-slate-400 font-black text-[10px] rounded-xl hover:bg-slate-200 transition-all">SIMULASI</button>
+            </div>
+            <div class="flex flex-col gap-4">
+                <input type="email" id="email" placeholder="EMAIL" class="p-5 bg-slate-50 rounded-2xl text-xs font-bold outline-none border border-transparent focus:border-slate-200 text-center uppercase tracking-widest">
+                <input type="password" id="password" placeholder="PASSWORD" class="p-5 bg-slate-50 rounded-2xl text-xs font-bold outline-none border border-transparent focus:border-slate-200 text-center uppercase">
+                <button id="login-btn" onclick="handleLogin()" class="mt-2 bg-rose-600 text-white py-5 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl">AUTHENTICATE TO LIVE PROD</button>
+            </div>
+        </div>
+
+        <!-- MAIN AREA -->
+        <div id="main-tool" class="hidden space-y-6">
+            <div class="flex flex-col md:flex-row gap-4 items-center">
+                <div class="flex-1 w-full flex gap-4 p-2 bg-white rounded-[2.5rem] shadow-sm border border-slate-100">
+                    <button id="mode-export" onclick="switchMode('export')" class="flex-1 py-4 bg-slate-900 text-white font-black italic rounded-2xl shadow-lg transition-all">MODE EKSPOR</button>
+                    <button id="mode-import" onclick="switchMode('import')" class="flex-1 py-4 bg-slate-100 text-slate-400 font-black italic rounded-2xl hover:bg-slate-200 transition-all">MODE IMPOR</button>
+                </div>
+                <button onclick="handleLogout()" class="w-full md:w-auto px-10 py-4 bg-white border-2 border-slate-100 text-slate-400 rounded-[2rem] font-black text-[10px] uppercase hover:text-rose-600 transition-all">🚪 LOGOUT</button>
+            </div>
+
+            <div class="bg-slate-900 p-6 rounded-[2.5rem] shadow-2xl text-center border-b-4 border-indigo-500">
+                <p id="process-status" class="text-indigo-400 font-black text-xs uppercase tracking-[0.1em] italic"></p>
+            </div>
+
+            <div class="p-6 bg-blue-50/50 rounded-[2.5rem] border-2 border-blue-100 shadow-sm">
+                <h2 class="text-[9px] font-black tracking-widest text-blue-400 text-center uppercase mb-4">1. DATA MASTER</h2>
+                <div id="master-grid" class="grid grid-cols-4 gap-4"></div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="p-6 bg-amber-50/50 rounded-[2.5rem] border-2 border-amber-100 space-y-6 shadow-sm">
+                    <div>
+                        <h2 class="text-[9px] font-black tracking-widest text-amber-500 text-center uppercase mb-4">2. DATA TRANSAKSI (HEADER)</h2>
+                        <div id="header-grid" class="grid grid-cols-3 gap-3"></div>
+                    </div>
+                    <div class="border-t-2 border-amber-200/50 pt-6">
+                        <h2 class="text-[9px] font-black tracking-widest text-amber-500 text-center uppercase mb-4">3. DATA TRANSAKSI (DETAIL)</h2>
+                        <div id="detail-grid" class="grid grid-cols-2 gap-3"></div>
+                    </div>
+                </div>
+
+                <div class="p-6 bg-indigo-50/50 rounded-[2.5rem] border-2 border-indigo-100 shadow-sm">
+                    <h2 class="text-[9px] font-black tracking-widest text-indigo-400 text-center uppercase mb-4">4. DATA LAINNYA & AKUNTANSI</h2>
+                    <div id="other-grid" class="grid grid-cols-2 gap-3"></div>
+                </div>
+            </div>
+
+            <div id="super-backup-container" class="pt-4 flex justify-center">
+                <button onclick="exportAllData()" class="group relative bg-indigo-600 hover:bg-indigo-700 text-white px-12 py-5 rounded-[2rem] font-black uppercase text-xs tracking-[0.2em] shadow-2xl transition-all active:scale-95">
+                    🚀 JALANKAN EKSPOR SEMUA DATA (SUPER BACKUP)
+                </button>
+            </div>
+            
+            <p class="text-center text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-8">
+                Data Integrity System • Mekarjaya Management Tool v2.7
+            </p>
+        </div>
+    </div>
+    <input type="file" id="hiddenFileInput" class="hidden" accept=".xlsx" onchange="handleFileSelect(event)">
+</body>
+</html>
