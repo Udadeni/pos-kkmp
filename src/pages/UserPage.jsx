@@ -4,7 +4,7 @@ import {
 } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import {
   Users, UserPlus, Search, Edit3, X,
   Shield, CheckCircle2, AlertCircle, RefreshCw, Lock, ShieldCheck, Mail, KeyRound, User
@@ -55,6 +55,13 @@ const UserPage = () => {
   }, [users, searchTerm]);
 
   const handleToggleStatus = async (user) => {
+    // 🛡️ PAGAR: Cegah menonaktifkan akun sendiri yang sedang dipakai login
+    const currentUserId = auth.currentUser?.uid;
+    if (user.id === currentUserId) {
+      alert("⚠️ Anda tidak bisa menonaktifkan akun Anda sendiri!");
+      return;
+    }
+
     if (!window.confirm(`Ubah status aktif ${user.name}?`)) return;
     try {
       await updateDoc(doc(db, 'master_users', user.id), {
@@ -183,9 +190,17 @@ const UserPage = () => {
                 >
                   <Edit3 size={14} /> Hak Akses
                 </button>
+
                 <button
                   onClick={() => handleToggleStatus(u)}
-                  className={`flex-1 py-3 rounded-2xl font-black text-[10px] flex items-center justify-center gap-2 transition-all ${u.is_active ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'}`}
+                  disabled={u.id === auth.currentUser?.uid}
+                  title={u.id === auth.currentUser?.uid ? "Tidak bisa menonaktifkan akun sendiri" : ""}
+                  className={`flex-1 py-3 rounded-2xl font-black text-[10px] flex items-center justify-center gap-2 transition-all ${u.id === auth.currentUser?.uid
+                    ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                    : u.is_active
+                      ? 'bg-red-50 text-red-600 hover:bg-red-100'
+                      : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                    }`}
                 >
                   {u.is_active ? <Lock size={14} /> : <CheckCircle2 size={14} />}
                   {u.is_active ? 'Matikan' : 'Aktifkan'}
