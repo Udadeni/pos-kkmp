@@ -23,7 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 
-.firebase/*
+.firebase/
 serviceAccountKey.json
 node_modules
 .DS_Store
